@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { X, Download, BookOpen, RefreshCw, Code, CheckCircle } from 'lucide-react';
+import { X, Download, BookOpen, RefreshCw, Code, CheckCircle, Printer } from 'lucide-react';
 import { ALL_CHAPTERS } from '../data/novelData';
 
 interface ArabicPDFExporterModalProps {
@@ -207,24 +207,63 @@ export default function ArabicPDFExporterModal({ isOpen, onClose }: ArabicPDFExp
 
   const activeChapters = getSelectedChapters();
 
-  // Helper to split text into lines of ~13 to 15 words, with 17 lines per page
-  const paginateText = (textArray: string[], linesPerPage: number = 17) => {
+  // Helper to split text into lines of ~12 to 14 words, with max 15 lines per page
+  const paginateText = (textArray: string[], linesPerPage: number = 15) => {
     const allLines: string[] = [];
-    const TARGET_WORDS_PER_LINE = 13;
-    const MAX_WORDS_PER_LINE = 15;
+    const TARGET_WORDS_PER_LINE = 12;
+    const MAX_WORDS_PER_LINE = 14;
 
     textArray.forEach(paragraph => {
-      const cleaned = paragraph
-        .replace(/['"״]/g, '')
-        .replace(/\s+([،,؛:.!؟?])/g, '$1')
-        .replace(/([،,؛:.!؟?])([^\s])/g, '$1 $2')
-        .replace(/\bو\s+([أ-ي])/g, 'و$1')
-        .replace(/\s+/g, ' ')
+      let cleaned = paragraph
+        // 1. Remove angle brackets, chevrons, and unwanted symbols (< > « » ‹ › ` " ' ~ ^ _)
+        .replace(/[<>«»‹›`'"״„“”—_~^]/g, '')
+        // 2. Normalize commas and punctuation to Arabic standards
+        .replace(/,/g, '،')
+        .replace(/;/g, '؛')
+        .replace(/\?/g, '؟')
+        // 3. Collapse multiple consecutive commas
+        .replace(/[،]{2,}/g, '،')
+        // 4. Grammar rule: In Arabic, conjunctions (و، أو، ثم، بل، أم) must NOT have a preceding comma
+        .replace(/[،]\s*(و|أو|ثم|أم|بل)\b/g, ' $1')
+        // 5. Remove comma before sentence-ending punctuation (. ؟ ! ؛ :)
+        .replace(/[،]\s*([.؛:!؟])/g, '$1')
+        // 6. Remove commas at start or end of text
+        .replace(/^[،\s]+/, '')
+        .replace(/[،\s]+$/, '.')
+        // 7. Orthography rule: Attach proclitic particles (و، ف، ب، ل، ك) to the following word
+        .replace(/(^|\s)و\s+([ء-ي])/g, '$1و$2')
+        .replace(/(^|\s)ف\s+([ء-ي])/g, '$1ف$2')
+        .replace(/(^|\s)ب\s+([ء-ي])/g, '$1ب$2')
+        .replace(/(^|\s)ل\s+([ء-ي])/g, '$1ل$2')
+        .replace(/(^|\s)ك\s+([ء-ي])/g, '$1ك$2')
+        // 8. Punctuation spacing: no space before punctuation, exactly one space after
+        .replace(/\s+([،؛:!؟\.])/g, '$1')
+        .replace(/([،؛:!؟\.])(?=[^\s،؛:!؟\.])/g, '$1 ')
+        // 9. Collapse multiple spaces into a single space
+        .replace(/\s{2,}/g, ' ')
         .trim();
 
       if (!cleaned) return;
 
-      const words = cleaned.split(' ').filter(Boolean);
+      // 10. Thin out excessive commas: if two commas appear less than 5 words apart, remove the second one
+      const rawTokens = cleaned.split(' ');
+      const thinnedTokens: string[] = [];
+      let wordsSinceLastComma = 999;
+      for (const token of rawTokens) {
+        if (token.endsWith('،')) {
+          if (wordsSinceLastComma < 5) {
+            thinnedTokens.push(token.slice(0, -1));
+          } else {
+            thinnedTokens.push(token);
+            wordsSinceLastComma = 0;
+          }
+        } else {
+          thinnedTokens.push(token);
+          wordsSinceLastComma++;
+        }
+      }
+
+      const words = thinnedTokens.filter(Boolean);
       let currentWords: string[] = [];
 
       for (let i = 0; i < words.length; i++) {
@@ -237,8 +276,8 @@ export default function ArabicPDFExporterModal({ isOpen, onClose }: ArabicPDFExp
           currentWords = [];
         } else if (count >= TARGET_WORDS_PER_LINE) {
           const lastWord = words[i];
-          const endsWithPunct = /[،,؛:.!؟?]$/.test(lastWord);
-          if (endsWithPunct || remainingInPara === 0 || remainingInPara >= 12 || remainingInPara <= 3) {
+          const endsWithPunct = /[،؛:.!؟]$/.test(lastWord);
+          if (endsWithPunct || remainingInPara === 0 || remainingInPara >= 10 || remainingInPara <= 3) {
             allLines.push(currentWords.join(' '));
             currentWords = [];
           }
@@ -260,7 +299,7 @@ export default function ArabicPDFExporterModal({ isOpen, onClose }: ArabicPDFExp
   const handleDownloadPDF = async (startIndex: number = 0) => {
     setIsGenerating(true);
     setDownloadSuccess(false);
-    setProgressMsg('جاري تجهيز وثيقة الرواية (13-15 كلمة للسطر، سفينة ووردة في الزوايا، أشكال بحرية حصرية)...');
+    setProgressMsg('جاري تجهيز وثيقة الرواية (15 سطراً للصفحة كحد أقصى، ضبط المسافات الإملائية والنحوية)...');
 
     await new Promise(resolve => setTimeout(resolve, 600));
 
@@ -303,24 +342,14 @@ export default function ArabicPDFExporterModal({ isOpen, onClose }: ArabicPDFExp
           backgroundColor: '#FFFFFF',
           windowWidth: 595,
           onclone: (clonedDoc) => {
-            const styleSheets = clonedDoc.querySelectorAll('style, link[rel="stylesheet"]');
-            styleSheets.forEach(sheet => sheet.remove());
-            const cleanStyle = clonedDoc.createElement('style');
-            cleanStyle.innerHTML = `
-              *, *::before, *::after { box-sizing: border-box !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-              body { background: #ffffff; color: #1e293b; font-family: 'Amiri', serif; margin: 0; padding: 0; direction: rtl; }
-              img { max-width: 100%; display: block; object-fit: cover; }
-              .footer-page-num { color: #f472b6 !important; font-size: 10px !important; font-weight: bold !important; }
-              .footer-rights { color: #64748b !important; font-size: 10px !important; font-family: 'Amiri', serif !important; }
-              .page-footer { position: absolute; bottom: 14px; right: 25px; left: 25px; display: flex; justify-content: space-between; align-items: center; direction: rtl; }
-              .novel-line { font-size: 17.5px !important; line-height: 1.84 !important; text-align: justify !important; text-justify: inter-word !important; text-align-last: center !important; width: 100% !important; margin: 0 !important; color: #1e293b !important; }
-              .novel-lines-container { width: 100% !important; max-width: 504px !important; margin: 0 auto !important; }
-              .inner-border { padding: 20px 22px 14px 24px !important; }
-              .char-icon-badge { border-radius: 50% !important; width: 36px !important; height: 36px !important; display: inline-flex !important; align-items: center !important; justify-content: center !important; }
-              .corner-mark-tr { position: absolute; top: 10px; right: 14px; z-index: 10; display: flex; }
-              .corner-mark-tl { position: absolute; top: 10px; left: 14px; z-index: 10; display: flex; }
+            // Keep all original styles intact for 100% exact fidelity with the preview
+            const printAdjust = clonedDoc.createElement('style');
+            printAdjust.innerHTML = `
+              *, *::before, *::after { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+              body { background: #ffffff !important; color: #1e293b; font-family: 'Amiri', serif !important; margin: 0; padding: 0; direction: rtl; }
+              .page { margin: 0 !important; box-shadow: none !important; width: 595px !important; height: 842px !important; }
             `;
-            clonedDoc.head.appendChild(cleanStyle);
+            clonedDoc.head.appendChild(printAdjust);
           }
         });
 
@@ -347,7 +376,7 @@ export default function ArabicPDFExporterModal({ isOpen, onClose }: ArabicPDFExp
     }
   };
 
-  const handleDownloadHTML = () => {
+  const generateBookHTML = () => {
     let pageNum = 0;
     const pagesHTML: string[] = [];
 
@@ -488,7 +517,7 @@ export default function ArabicPDFExporterModal({ isOpen, onClose }: ArabicPDFExp
     // Chapters
     activeChapters.forEach(ch => {
       const imgResource = CHAPTER_IMAGE_MAP[String(ch.id)] || CHAPTER_IMAGE_MAP['1'];
-      const textPages = paginateText(ch.contentAr, 17);
+      const textPages = paginateText(ch.contentAr, 15);
 
       // Chapter title page (Lifted titles with top corners Ship & Rose)
       pageNum++;
@@ -511,7 +540,7 @@ export default function ArabicPDFExporterModal({ isOpen, onClose }: ArabicPDFExp
         </div>
       </div>`);
 
-      // Text pages (13-15 words per line, 17 lines per page, balanced & centered)
+      // Text pages (12-14 words per line, max 15 lines per page, balanced & centered)
       textPages.forEach(lines => {
         pageNum++;
         const linesFormatted = lines.map(line => `          <p class="novel-line">${line}</p>`).join('\n');
@@ -753,17 +782,20 @@ ${linesFormatted}
       flex-direction: column;
       justify-content: center;
       align-items: center;
-      padding: 20px 22px 14px 24px;
+      padding: 26px 28px 48px 28px;
       position: relative;
       background-color: #ffffff;
+      overflow: hidden;
     }
     .front-inner-border {
       justify-content: flex-start !important;
-      padding: 26px 20px 20px 20px !important;
+      padding: 26px 24px 48px 24px !important;
+      overflow: hidden;
     }
     .inner-border-chapter {
       justify-content: flex-start !important;
-      padding: 20px 20px 16px 20px !important;
+      padding: 22px 24px 48px 24px !important;
+      overflow: hidden;
     }
     /* Miniature Top Corner Marks: Ship on Right, Rose on Left */
     .corner-mark-tr {
@@ -843,12 +875,12 @@ ${linesFormatted}
     }
     .chapter-img-box {
       width: 100%;
-      height: 405px;
+      height: 385px;
       background-color: #f8fafc;
       border-radius: 14px;
       overflow: hidden;
       border: 2px solid #cbd5e1;
-      margin-bottom: 10px;
+      margin-bottom: 8px;
       box-shadow: 0 8px 24px rgba(0,0,0,0.08);
       box-sizing: border-box;
     }
@@ -858,17 +890,20 @@ ${linesFormatted}
       font-weight: bold;
       margin: 0;
     }
-    /* Footer */
+    /* Footer: Fixed at bottom with safe clearance */
     .page-footer {
       position: absolute;
       bottom: 12px;
-      right: 22px;
-      left: 22px;
+      right: 26px;
+      left: 26px;
       width: auto;
+      height: 20px;
       display: flex;
       justify-content: space-between;
       align-items: center;
       direction: rtl;
+      z-index: 30;
+      pointer-events: none;
     }
     .footer-rights {
       color: #64748b;
@@ -885,21 +920,22 @@ ${linesFormatted}
       letter-spacing: 0.5px;
       text-align: left;
     }
-    /* Text Pages: 13-15 words per line, 17 lines, centered layout */
+    /* Text Pages: max 15 lines per page, 12-14 words per line, balanced Arabic spacing */
     .novel-lines-container {
       width: 100%;
-      max-width: 504px;
+      max-width: 486px;
       margin: 0 auto;
       flex: 1;
       display: flex;
       flex-direction: column;
       justify-content: center;
-      gap: 1.5px;
-      padding: 4px 0;
+      gap: 3.5px;
+      padding: 0;
+      box-sizing: border-box;
     }
     .novel-line {
-      font-size: 17.5px;
-      line-height: 1.84;
+      font-size: 16.5px;
+      line-height: 1.82;
       color: #1e293b;
       text-align: justify;
       text-justify: inter-word;
@@ -907,8 +943,9 @@ ${linesFormatted}
       font-family: 'Amiri', serif;
       margin: 0;
       width: 100%;
-      min-height: 31px;
-      letter-spacing: -0.15px;
+      min-height: 28px;
+      letter-spacing: 0;
+      word-spacing: 1px;
     }
     /* Front Pages & Copyright Pages */
     .front-page-header {
@@ -934,12 +971,12 @@ ${linesFormatted}
     .character-list {
       display: flex;
       flex-direction: column;
-      gap: 9px;
+      gap: 7px;
       width: 100%;
       text-align: right;
     }
     .character-card {
-      padding: 9px 12px;
+      padding: 8px 12px;
       background-color: #f8fafc;
       border: 1px solid #e2e8f0;
       border-radius: 12px;
@@ -948,7 +985,7 @@ ${linesFormatted}
       display: flex;
       align-items: center;
       gap: 10px;
-      margin-bottom: 4px;
+      margin-bottom: 3px;
     }
     /* Circular Character Icon Badge */
     .char-icon-badge {
@@ -1171,11 +1208,16 @@ ${pagesHTML.join('\n')}
 </body>
 </html>`;
 
+    return fullHTML;
+  };
+
+  const handleDownloadHTML = () => {
+    const fullHTML = generateBookHTML();
     const blob = new Blob([fullHTML], { type: 'text/html;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = 'أغنية_الملح_والظلال_الفاخرة.html';
+    link.download = downloadScope === 'full' ? 'أغنية_الملح_والظلال_الفاخرة.html' : `أغنية_الملح_والظلال_جزء_${downloadScope}.html`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -1183,6 +1225,45 @@ ${pagesHTML.join('\n')}
     setTimeout(() => {
       URL.revokeObjectURL(url);
     }, 60000);
+  };
+
+  const handleDirectPrint = () => {
+    setIsGenerating(true);
+    setProgressMsg('جاري تحضير أمر الطباعة المباشرة ومطابقة تفاصيل الكتاب بالكامل...');
+    try {
+      const existingFrame = document.getElementById('novel-print-iframe');
+      if (existingFrame) existingFrame.remove();
+
+      const printFrame = document.createElement('iframe');
+      printFrame.id = 'novel-print-iframe';
+      printFrame.style.position = 'fixed';
+      printFrame.style.right = '0';
+      printFrame.style.bottom = '0';
+      printFrame.style.width = '0';
+      printFrame.style.height = '0';
+      printFrame.style.border = '0';
+      printFrame.style.opacity = '0';
+      printFrame.style.pointerEvents = 'none';
+      document.body.appendChild(printFrame);
+
+      const htmlContent = generateBookHTML();
+      const frameDoc = printFrame.contentWindow?.document || printFrame.contentDocument;
+      if (frameDoc) {
+        frameDoc.open();
+        frameDoc.write(htmlContent);
+        frameDoc.close();
+        setTimeout(() => {
+          setIsGenerating(false);
+          setProgressMsg('');
+          printFrame.contentWindow?.focus();
+          printFrame.contentWindow?.print();
+        }, 800);
+      }
+    } catch (err) {
+      console.error('Print error:', err);
+      setIsGenerating(false);
+      setProgressMsg('');
+    }
   };
 
   let globalPageCounter = 0;
@@ -1216,6 +1297,14 @@ ${pagesHTML.join('\n')}
               className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-2xl text-sm font-bold transition-all flex items-center gap-2 shadow-lg hover:shadow-blue-500/25"
             >
               <Code className="w-5 h-5" /> تنزيل HTML
+            </button>
+            <button
+              onClick={handleDirectPrint}
+              disabled={isGenerating}
+              className="px-5 py-2.5 bg-purple-600 hover:bg-purple-500 text-white rounded-2xl text-sm font-bold transition-all flex items-center gap-2 shadow-lg disabled:opacity-50 hover:shadow-purple-500/25"
+              title="طباعة مباشرة أو حفظ بتنسيق PDF بكامل تفاصيل المعاينة وجودة فيكتور فائقة"
+            >
+              <Printer className="w-5 h-5" /> طباعة / حفظ PDF
             </button>
             <button
               onClick={() => handleDownloadPDF(0)}
@@ -1505,7 +1594,7 @@ ${pagesHTML.join('\n')}
             )}
 
             {activeChapters.map((ch) => {
-              const pages = paginateText(ch.contentAr, 17);
+              const pages = paginateText(ch.contentAr, 15);
               const imgResource = CHAPTER_IMAGE_MAP[String(ch.id)] || CHAPTER_IMAGE_MAP['1'];
               return (
                 <React.Fragment key={ch.id}>
@@ -1747,17 +1836,20 @@ ${pagesHTML.join('\n')}
           flex-direction: column;
           justify-content: center;
           align-items: center;
-          padding: 20px 22px 14px 24px;
+          padding: 26px 28px 48px 28px;
           position: relative;
           background-color: #ffffff;
+          overflow: hidden;
         }
         .front-inner-border {
           justify-content: flex-start !important;
-          padding: 26px 20px 20px 20px !important;
+          padding: 26px 24px 48px 24px !important;
+          overflow: hidden;
         }
         .inner-border-chapter {
           justify-content: flex-start !important;
-          padding: 20px 20px 16px 20px !important;
+          padding: 22px 24px 48px 24px !important;
+          overflow: hidden;
         }
         /* Miniature Top Corner Marks: Ship on Right, Rose on Left */
         .corner-mark-tr {
@@ -1836,12 +1928,12 @@ ${pagesHTML.join('\n')}
         }
         .chapter-img-box {
           width: 100%;
-          height: 405px;
+          height: 385px;
           background-color: #f8fafc;
           border-radius: 14px;
           overflow: hidden;
           border: 2px solid #cbd5e1;
-          margin-bottom: 10px;
+          margin-bottom: 8px;
           box-shadow: 0 8px 24px rgba(0,0,0,0.08);
           box-sizing: border-box;
         }
@@ -1852,16 +1944,20 @@ ${pagesHTML.join('\n')}
           margin: 0;
         }
 
+        /* Footer: Fixed at bottom with safe clearance */
         .page-footer {
           position: absolute;
           bottom: 12px;
-          right: 22px;
-          left: 22px;
+          right: 26px;
+          left: 26px;
           width: auto;
+          height: 20px;
           display: flex;
           justify-content: space-between;
           align-items: center;
           direction: rtl;
+          z-index: 30;
+          pointer-events: none;
         }
         .footer-rights {
           color: #64748b;
@@ -1879,10 +1975,22 @@ ${pagesHTML.join('\n')}
           text-align: left;
         }
 
-        /* 17 Lines, ~13-15 Words Per Line, Centered inside frame */
+        /* Text Pages: max 15 lines per page, 12-14 words per line, balanced Arabic spacing */
+        .novel-lines-container {
+          width: 100%;
+          max-width: 486px;
+          margin: 0 auto;
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          justify-content: center;
+          gap: 3.5px;
+          padding: 0;
+          box-sizing: border-box;
+        }
         .novel-line {
-          font-size: 17.5px;
-          line-height: 1.84;
+          font-size: 16.5px;
+          line-height: 1.82;
           color: #1e293b;
           text-align: justify;
           text-justify: inter-word;
@@ -1890,19 +1998,9 @@ ${pagesHTML.join('\n')}
           font-family: 'Amiri', serif;
           margin: 0;
           width: 100%;
-          min-height: 31px;
-          letter-spacing: -0.15px;
-        }
-        .novel-lines-container {
-          width: 100%;
-          max-width: 504px;
-          margin: 0 auto;
-          flex: 1;
-          display: flex;
-          flex-direction: column;
-          justify-content: center;
-          gap: 1.5px;
-          padding: 4px 0;
+          min-height: 28px;
+          letter-spacing: 0;
+          word-spacing: 1px;
         }
 
         .front-page-header {
@@ -1928,12 +2026,12 @@ ${pagesHTML.join('\n')}
         .character-list {
           display: flex;
           flex-direction: column;
-          gap: 9px;
+          gap: 7px;
           width: 100%;
           text-align: right;
         }
         .character-card {
-          padding: 9px 12px;
+          padding: 8px 12px;
           background-color: #f8fafc;
           border: 1px solid #e2e8f0;
           border-radius: 12px;
@@ -1942,7 +2040,7 @@ ${pagesHTML.join('\n')}
           display: flex;
           align-items: center;
           gap: 10px;
-          margin-bottom: 4px;
+          margin-bottom: 3px;
         }
         /* Circular Character Icon Badge */
         .char-icon-badge {
